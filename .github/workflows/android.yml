@@ -14,52 +14,55 @@ jobs:
     
     - name: Setup SDL2 Project
       run: |
-        # 1. Download SDL2
+        # 1. Download SDL2 Source
         wget https://github.com/libsdl-org/SDL/releases/download/release-2.30.0/SDL2-2.30.0.zip
         unzip -q SDL2-2.30.0.zip
         
-        # 2. Move the Android Project template out to the root
+        # 2. Setup the Android Project Structure
         mv SDL2-2.30.0/android-project .
-        
-        # 3. Rename the remaining source folder to 'SDL'
         mv SDL2-2.30.0 SDL
         
-        # 4. Move the SDL source folder into the JNI directory
+        # 3. Move SDL into the JNI folder
         mkdir -p android-project/app/src/main/jni
         mv SDL android-project/app/src/main/jni/
         
-        # 5. Setup the 'src' directory for your main.cpp
+        # 4. Setup Game Source Directory
         mkdir -p android-project/app/src/main/jni/src
-        
-        # 6. Copy your game code
         cp main.cpp android-project/app/src/main/jni/src/
         
+    - name: Sanitize Code (Remove Image/Mixer)
+      run: |
+        # We strip these includes because we are only building the Core Physics prototype right now.
+        # This prevents "file not found" errors.
+        sed -i 's/#include <SDL_image.h>//g' android-project/app/src/main/jni/src/main.cpp
+        sed -i 's/#include <SDL_mixer.h>//g' android-project/app/src/main/jni/src/main.cpp
+
     - name: Configure Build Files
       run: |
-        # --- STEP 1: Configure the Game Module (src/Android.mk) ---
+        # --- 1. Create the Game Module Makefile (src/Android.mk) ---
         cd android-project/app/src/main/jni/src
         
         echo 'LOCAL_PATH := $(call my-dir)' > Android.mk
         echo 'include $(CLEAR_VARS)' >> Android.mk
         echo 'LOCAL_MODULE := main' >> Android.mk
-        # Point to the SDL include folder (Up one level, then into SDL/include)
-        echo 'LOCAL_C_INCLUDES := $(LOCAL_PATH)/../SDL/include' >> Android.mk
+        # Path to SDL headers (Up 2 levels from src -> jni -> SDL)
+        echo 'LOCAL_C_INCLUDES := $(LOCAL_PATH)/../../SDL/include' >> Android.mk
         echo 'LOCAL_SRC_FILES := main.cpp' >> Android.mk
         echo 'LOCAL_SHARED_LIBRARIES := SDL2' >> Android.mk
+        # Only link core libraries, removed -lSDL2_image/mixer
         echo 'LOCAL_LDLIBS := -lGLESv1_CM -lGLESv2 -llog' >> Android.mk
         echo 'include $(BUILD_SHARED_LIBRARY)' >> Android.mk
         
-        # --- STEP 2: Configure the Root Loader (jni/Android.mk) ---
-        # This fixes the "undefined module" error by forcing SDL to load
+        # --- 2. Create the Master Makefile (jni/Android.mk) ---
         cd ..
         
         echo 'LOCAL_PATH := $(call my-dir)' > Android.mk
-        # Explicitly include SDL2's makefile first
+        # IMPORTANT: Include SDL2 first so the module is defined
         echo 'include $(LOCAL_PATH)/SDL/Android.mk' >> Android.mk
-        # Then include our game's makefile
+        # Then include our game
         echo 'include $(LOCAL_PATH)/src/Android.mk' >> Android.mk
         
-        # --- STEP 3: Configure Application.mk ---
+        # --- 3. Configure Application.mk ---
         echo 'APP_ABI := arm64-v8a' > Application.mk
         echo 'APP_STL := c++_shared' >> Application.mk
         echo 'APP_PLATFORM := android-21' >> Application.mk
