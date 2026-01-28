@@ -25,7 +25,6 @@ jobs:
         mv SDL2-2.30.0 SDL
         
         # 4. Move the SDL source folder into the JNI directory
-        # We use -f to force and ensure the parent dir exists
         mkdir -p android-project/app/src/main/jni
         mv SDL android-project/app/src/main/jni/
         
@@ -37,21 +36,30 @@ jobs:
         
     - name: Configure Build Files
       run: |
+        # --- STEP 1: Configure the Game Module (src/Android.mk) ---
         cd android-project/app/src/main/jni/src
         
-        # Create Android.mk
         echo 'LOCAL_PATH := $(call my-dir)' > Android.mk
         echo 'include $(CLEAR_VARS)' >> Android.mk
         echo 'LOCAL_MODULE := main' >> Android.mk
-        echo 'SDL_PATH := ../SDL' >> Android.mk
-        echo 'LOCAL_C_INCLUDES := $(LOCAL_PATH)/$(SDL_PATH)/include' >> Android.mk
+        # Point to the SDL include folder (Up one level, then into SDL/include)
+        echo 'LOCAL_C_INCLUDES := $(LOCAL_PATH)/../SDL/include' >> Android.mk
         echo 'LOCAL_SRC_FILES := main.cpp' >> Android.mk
         echo 'LOCAL_SHARED_LIBRARIES := SDL2' >> Android.mk
         echo 'LOCAL_LDLIBS := -lGLESv1_CM -lGLESv2 -llog' >> Android.mk
         echo 'include $(BUILD_SHARED_LIBRARY)' >> Android.mk
         
-        # Create Application.mk in the parent jni folder
+        # --- STEP 2: Configure the Root Loader (jni/Android.mk) ---
+        # This fixes the "undefined module" error by forcing SDL to load
         cd ..
+        
+        echo 'LOCAL_PATH := $(call my-dir)' > Android.mk
+        # Explicitly include SDL2's makefile first
+        echo 'include $(LOCAL_PATH)/SDL/Android.mk' >> Android.mk
+        # Then include our game's makefile
+        echo 'include $(LOCAL_PATH)/src/Android.mk' >> Android.mk
+        
+        # --- STEP 3: Configure Application.mk ---
         echo 'APP_ABI := arm64-v8a' > Application.mk
         echo 'APP_STL := c++_shared' >> Application.mk
         echo 'APP_PLATFORM := android-21' >> Application.mk
