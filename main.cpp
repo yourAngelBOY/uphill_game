@@ -1,279 +1,363 @@
-/*
-   Uphill Both Ways - Prototype Chunk 1 (Celeste Physics Version)
-   Target: Android (SDL2)
-*/
-
 #include <SDL.h>
-#include <SDL_image.h>
-#include <SDL_mixer.h>
 #include <vector>
 #include <cmath>
+#include <map>
 #include <algorithm>
-#include <iostream>
 
-// --- Celeste Constants (Scaled x4 for 720p) ---
-const int LOGICAL_WIDTH = 1280;
-const int LOGICAL_HEIGHT = 720;
-const float SCALE = 4.0f;
+// ==========================================
+// CONFIGURATION & CONSTANTS
+// ==========================================
 
-// Values taken directly from Player.cs and scaled
-const float GRAVITY = 900.0f * SCALE;
-const float MAX_FALL = 160.0f * SCALE;
-const float FAST_MAX_FALL = 240.0f * SCALE;
-const float MAX_RUN = 90.0f * SCALE;
-const float RUN_ACCEL = 1000.0f * SCALE;
-const float RUN_REDUCE = 400.0f * SCALE;
-const float JUMP_SPEED = -105.0f * SCALE;
-const float VAR_JUMP_TIME = 0.2f; // Time you can hold jump for higher jump
-const float AIR_MULT = 0.65f;
+const int SCREEN_WIDTH = 1280;
+const int SCREEN_HEIGHT = 720;
 
-// --- Helper Math (Monocle/Celeste logic) ---
-float Approach(float val, float target, float maxMove) {
-    if (val > target) {
-        return std::max(val - maxMove, target);
-    } else {
-        return std::min(val + maxMove, target);
-    }
-}
+// Physics Constants
+const float GRAVITY = 2200.0f;
+const float JUMP_FORCE = -950.0f;
+const float MOVE_SPEED = 450.0f;
+const float ACCELERATION = 3000.0f;
+const float FRICTION = 2500.0f;
+const float AIR_FRICTION = 500.0f;
+const float MAX_FALL_SPEED = 1000.0f;
+const float TIME_STEP = 0.016f;
 
-// --- Structures ---
-struct Rect { float x, y, w, h; };
+// ==========================================
+// STRUCTS
+// ==========================================
+
+struct Vec2 { float x, y; };
 
 struct Player {
-    Rect rect;
-    float vx, vy;
+    Vec2 pos;
+    Vec2 vel;
+    Vec2 size;
     bool onGround;
-    float varJumpTimer; // For variable jump height
-    bool autoJump;      // Buffer
 };
 
+struct Obstacle {
+    SDL_Rect rect;
+    int type;
+};
+
+// Input Abstraction (Decouples Hardware from Logic)
+struct InputState {
+    bool left = false;
+    bool right = false;
+    bool jumpPressed = false; // True only on the frame pressed
+    bool jumpHeld = false;    // True while holding button
+};
+
+// Touch Button Definition
 struct TouchButton {
     SDL_Rect rect;
-    bool active;
-    long long fingerId;
-    Uint8 r, g, b, a;
+    std::string name; // For debugging
+    bool active;      // Visual feedback
 };
 
-// --- Globals ---
+// ==========================================
+// GLOBALS
+// ==========================================
+
 SDL_Window* window = nullptr;
 SDL_Renderer* renderer = nullptr;
 bool isRunning = true;
-Player player;
-std::vector<Rect> platforms;
+std::vector<Obstacle> obstacles;
 
-// Input State
-int moveInput = 0; // -1, 0, 1
-bool jumpPressed = false;
-bool jumpHeld = false;
-
-// UI
+// Touch State Tracking
+std::map<SDL_FingerID, Vec2> activeFingers;
 TouchButton btnLeft, btnRight, btnJump;
 
-bool CheckCollision(Rect a, Rect b) {
-    return (a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y);
-}
+// ==========================================
+// SETUP & LEVELS
+// ==========================================
 
-void InitGame() {
-    // Player Setup (Red Madeline Box)
-    player.rect = {100, 400, 8.0f * SCALE, 11.0f * SCALE}; // 32x44 approx
-    player.vx = 0;
-    player.vy = 0;
-    player.onGround = false;
-    player.varJumpTimer = 0;
-
-    // Platforms (Green)
-    platforms.push_back({0, 650, 1280, 70}); // Floor
-    platforms.push_back({400, 550, 200, 30});
-    platforms.push_back({700, 450, 200, 30});
-    platforms.push_back({1000, 350, 200, 30});
-    platforms.push_back({1250, 0, 30, 720}); // Wall
-
-    // UI Buttons
-    btnLeft.rect = {50, 550, 150, 150};
-    btnLeft.active = false; btnLeft.fingerId = -1;
-    btnLeft.r=255; btnLeft.g=255; btnLeft.b=255; btnLeft.a=100;
-
-    btnRight.rect = {220, 550, 150, 150};
-    btnRight.active = false; btnRight.fingerId = -1;
-    btnRight.r=255; btnRight.g=255; btnRight.b=255; btnRight.a=100;
-
-    btnJump.rect = {1050, 500, 180, 180};
-    btnJump.active = false; btnJump.fingerId = -1;
-    btnJump.r=0; btnJump.g=255; btnJump.b=0; btnJump.a=100;
-}
-
-void HandleTouch(int type, long long fingerId, float x, float y) {
-    int lx = (int)(x * LOGICAL_WIDTH);
-    int ly = (int)(y * LOGICAL_HEIGHT);
-    SDL_Point p = {lx, ly};
-
-    if (type == SDL_FINGERDOWN) {
-        if (SDL_PointInRect(&p, &btnLeft.rect)) { btnLeft.active = true; btnLeft.fingerId = fingerId; }
-        if (SDL_PointInRect(&p, &btnRight.rect)) { btnRight.active = true; btnRight.fingerId = fingerId; }
-        if (SDL_PointInRect(&p, &btnJump.rect)) { 
-            btnJump.active = true; 
-            btnJump.fingerId = fingerId; 
-            jumpPressed = true; 
-            jumpHeld = true; 
-        }
-    }
-    else if (type == SDL_FINGERUP) {
-        if (fingerId == btnLeft.fingerId) { btnLeft.active = false; btnLeft.fingerId = -1; }
-        if (fingerId == btnRight.fingerId) { btnRight.active = false; btnRight.fingerId = -1; }
-        if (fingerId == btnJump.fingerId) { 
-            btnJump.active = false; 
-            btnJump.fingerId = -1; 
-            jumpHeld = false; 
-        }
-    }
-}
-
-void Update(float dt) {
-    // Input Processing
-    moveInput = 0;
-    if (btnLeft.active) moveInput = -1;
-    if (btnRight.active) moveInput = 1;
-
-    // --- Celeste Physics Implementation ---
-
-    // 1. Horizontal Movement (RunAccel / RunReduce)
-    float targetSpeed = moveInput * MAX_RUN;
-    float accel = RUN_ACCEL;
+void InitControls() {
+    // Bottom Left Corner
+    btnLeft =  { {50, 550, 150, 150}, "Left", false };
+    btnRight = { {250, 550, 150, 150}, "Right", false };
     
-    // Air Multiplier
-    if (!player.onGround) accel *= AIR_MULT;
+    // Bottom Right Corner
+    btnJump =  { {1030, 550, 200, 150}, "Jump", false };
+}
 
-    // Friction vs Acceleration logic
-    if (std::abs(player.vx) > MAX_RUN && std::signbit(player.vx) == std::signbit(moveInput)) {
-        // Reduce back from beyond max speed
-        player.vx = Approach(player.vx, targetSpeed, RUN_REDUCE * dt); 
-    } else {
-        // Approach max speed
-        player.vx = Approach(player.vx, targetSpeed, accel * dt);
+void LoadLevel() {
+    obstacles.clear();
+    // 1. Floor
+    obstacles.push_back({ {0, 600, 1280, 120}, 0 });
+    // 2. Steps
+    obstacles.push_back({ {300, 500, 200, 20}, 0 });
+    obstacles.push_back({ {600, 400, 200, 20}, 0 });
+    obstacles.push_back({ {900, 250, 300, 20}, 0 });
+    // 3. Walls & Ceiling
+    obstacles.push_back({ {-50, 0, 50, 720}, 0 });
+    obstacles.push_back({ {1280, 0, 50, 720}, 0 });
+    obstacles.push_back({ {400, 200, 100, 20}, 0 });
+}
+
+bool CheckCollision(const SDL_Rect& a, const SDL_Rect& b) {
+    return (a.x < b.x + b.w && a.x + a.w > b.x &&
+            a.y < b.y + b.h && a.y + a.h > b.y);
+}
+
+bool IsPointInRect(float x, float y, const SDL_Rect& r) {
+    return (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h);
+}
+
+// ==========================================
+// INPUT HANDLING (KEYBOARD + TOUCH)
+// ==========================================
+
+void HandleInput(InputState& input) {
+    SDL_Event e;
+    
+    // Reset "Frame Perfect" inputs
+    input.jumpPressed = false;
+
+    // 1. Event Polling
+    while (SDL_PollEvent(&e) != 0) {
+        if (e.type == SDL_QUIT) {
+            isRunning = false;
+        }
+        // --- KEYBOARD (PC Testing) ---
+        else if (e.type == SDL_KEYDOWN) {
+            if (e.key.keysym.sym == SDLK_ESCAPE) isRunning = false;
+            if (e.key.keysym.sym == SDLK_SPACE && !e.key.repeat) {
+                input.jumpPressed = true;
+                input.jumpHeld = true;
+            }
+        }
+        else if (e.type == SDL_KEYUP) {
+            if (e.key.keysym.sym == SDLK_SPACE) input.jumpHeld = false;
+        }
+        
+        // --- TOUCH (Android) ---
+        // We track fingers manually to support multi-touch (e.g., Run + Jump)
+        else if (e.type == SDL_FINGERDOWN || e.type == SDL_FINGERMOTION) {
+            // Convert normalized (0..1) to Logical (0..1280)
+            float x = e.tfinger.x * SCREEN_WIDTH;
+            float y = e.tfinger.y * SCREEN_HEIGHT;
+            activeFingers[e.tfinger.fingerId] = { x, y };
+
+            // Check if this specific touch *just* hit the jump button (Tap event)
+            if (e.type == SDL_FINGERDOWN && IsPointInRect(x, y, btnJump.rect)) {
+                input.jumpPressed = true;
+            }
+        }
+        else if (e.type == SDL_FINGERUP) {
+            activeFingers.erase(e.tfinger.fingerId);
+        }
+    }
+
+    // 2. Continuous State Checking
+    // Reset continuous flags
+    input.left = false;
+    input.right = false;
+    
+    // Keyboard Continuous
+    const Uint8* keys = SDL_GetKeyboardState(NULL);
+    if (keys[SDL_SCANCODE_LEFT]) input.left = true;
+    if (keys[SDL_SCANCODE_RIGHT]) input.right = true;
+
+    // Touch Continuous (Loop through all active fingers)
+    bool touchJumpHeld = false;
+    
+    // Reset visual feedback
+    btnLeft.active = false;
+    btnRight.active = false;
+    btnJump.active = false;
+
+    for (auto const& [id, pos] : activeFingers) {
+        if (IsPointInRect(pos.x, pos.y, btnLeft.rect)) {
+            input.left = true;
+            btnLeft.active = true;
+        }
+        if (IsPointInRect(pos.x, pos.y, btnRight.rect)) {
+            input.right = true;
+            btnRight.active = true;
+        }
+        if (IsPointInRect(pos.x, pos.y, btnJump.rect)) {
+            touchJumpHeld = true;
+            btnJump.active = true;
+        }
+    }
+    
+    // Merge Keyboard and Touch for Jump Hold
+    input.jumpHeld = (touchJumpHeld || keys[SDL_SCANCODE_SPACE]);
+}
+
+// ==========================================
+// PHYSICS
+// ==========================================
+
+void UpdatePhysics(Player& player, const InputState& input, float dt) {
+    // 1. Horizontal
+    float targetSpeed = 0.0f;
+    if (input.left) targetSpeed = -MOVE_SPEED;
+    if (input.right) targetSpeed = MOVE_SPEED;
+
+    float friction = player.onGround ? FRICTION : AIR_FRICTION;
+
+    if (player.vel.x < targetSpeed) {
+        player.vel.x += ACCELERATION * dt;
+        if (player.vel.x > targetSpeed) player.vel.x = targetSpeed;
+    }
+    else if (player.vel.x > targetSpeed) {
+        player.vel.x -= ACCELERATION * dt;
+        if (player.vel.x < targetSpeed) player.vel.x = targetSpeed;
+    }
+
+    if (targetSpeed == 0.0f) {
+        if (player.vel.x > 0) {
+            player.vel.x -= friction * dt;
+            if (player.vel.x < 0) player.vel.x = 0;
+        } else if (player.vel.x < 0) {
+            player.vel.x += friction * dt;
+            if (player.vel.x > 0) player.vel.x = 0;
+        }
     }
 
     // 2. Jumping
-    if (player.varJumpTimer > 0) {
-        player.varJumpTimer -= dt;
+    // Initial Jump
+    if (input.jumpPressed && player.onGround) {
+        player.vel.y = JUMP_FORCE;
+        player.onGround = false;
     }
-
-    if (jumpPressed) {
-        jumpPressed = false; // Consume buffer
-        if (player.onGround) {
-            player.vy = JUMP_SPEED;
-            player.varJumpTimer = VAR_JUMP_TIME;
-            player.onGround = false;
-        }
-    }
-
-    // Variable Jump Height (holding button keeps velocity up)
-    if (player.varJumpTimer > 0) {
-        if (jumpHeld) {
-            player.vy = std::min(player.vy, JUMP_SPEED); // Keep going up
-        } else {
-            player.varJumpTimer = 0; // Cut jump short
-        }
+    // Variable Jump Height (Celeste Mechanic)
+    // If we release the button while moving up, cut the speed
+    if (!input.jumpHeld && player.vel.y < 0) {
+        player.vel.y *= 0.5f; 
     }
 
     // 3. Gravity
-    float maxFall = MAX_FALL;
-    // Fast fall if holding down (optional, keeping simple for now) or apex
-    if (std::abs(player.vy) < 40.0f * SCALE && !jumpHeld) {
-        player.vy = Approach(player.vy, maxFall, GRAVITY * 0.5f * dt); // Apex floatiness
-    } else {
-        player.vy = Approach(player.vy, maxFall, GRAVITY * dt);
-    }
+    player.vel.y += GRAVITY * dt;
+    if (player.vel.y > MAX_FALL_SPEED) player.vel.y = MAX_FALL_SPEED;
 
-    // 4. Move X
-    player.rect.x += player.vx * dt;
-    Rect pRect = player.rect;
-    for (const auto& plat : platforms) {
-        if (CheckCollision(pRect, plat)) {
-            if (player.vx > 0) player.rect.x = plat.x - player.rect.w;
-            else if (player.vx < 0) player.rect.x = plat.x + plat.w;
-            player.vx = 0;
+    // 4. Movement & Collision (Axis Separated)
+    // X Axis
+    player.pos.x += player.vel.x * dt;
+    SDL_Rect pRect = { (int)player.pos.x, (int)player.pos.y, (int)player.size.x, (int)player.size.y };
+    for (const auto& obs : obstacles) {
+        if (CheckCollision(pRect, obs.rect)) {
+            if (player.vel.x > 0) player.pos.x = (float)(obs.rect.x - player.size.x);
+            else if (player.vel.x < 0) player.pos.x = (float)(obs.rect.x + obs.rect.w);
+            player.vel.x = 0;
         }
     }
 
-    // 5. Move Y
-    player.rect.y += player.vy * dt;
+    // Y Axis
+    player.pos.y += player.vel.y * dt;
     player.onGround = false;
-    pRect = player.rect;
-    for (const auto& plat : platforms) {
-        if (CheckCollision(pRect, plat)) {
-            if (player.vy > 0) { // Landing
-                player.rect.y = plat.y - player.rect.h;
+    pRect.x = (int)player.pos.x;
+    pRect.y = (int)player.pos.y;
+    for (const auto& obs : obstacles) {
+        if (CheckCollision(pRect, obs.rect)) {
+            if (player.vel.y > 0) {
+                player.pos.y = (float)(obs.rect.y - player.size.y);
                 player.onGround = true;
-                player.vy = 0;
-            } else if (player.vy < 0) { // Head bonk
-                player.rect.y = plat.y + plat.h;
-                player.vy = 0;
-                player.varJumpTimer = 0;
+                player.vel.y = 0;
+            } else if (player.vel.y < 0) {
+                player.pos.y = (float)(obs.rect.y + obs.rect.h);
+                player.vel.y = 0;
             }
         }
     }
 
-    // Bounds Reset
-    if (player.rect.y > LOGICAL_HEIGHT + 100) {
-        player.rect.x = 100;
-        player.rect.y = 400;
-        player.vx = 0;
-        player.vy = 0;
+    // World Bounds
+    if (player.pos.y > SCREEN_HEIGHT + 100) {
+        player.pos = { 100, 500 };
+        player.vel = { 0, 0 };
     }
 }
 
-void Render() {
-    SDL_SetRenderDrawColor(renderer, 135, 206, 235, 255);
+// ==========================================
+// RENDERING
+// ==========================================
+
+void RenderButton(const TouchButton& btn) {
+    // Draw Outline
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 150);
+    SDL_RenderDrawRect(renderer, &btn.rect);
+
+    // Draw Fill (Visual feedback when pressed)
+    if (btn.active) {
+        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 100);
+        SDL_RenderFillRect(renderer, &btn.rect);
+    }
+}
+
+void Render(const Player& player) {
+    SDL_SetRenderDrawColor(renderer, 135, 206, 235, 255); // Sky Blue
     SDL_RenderClear(renderer);
 
-    // Platforms
-    SDL_SetRenderDrawColor(renderer, 34, 139, 34, 255);
-    for (const auto& plat : platforms) {
-        SDL_Rect r = {(int)plat.x, (int)plat.y, (int)plat.w, (int)plat.h};
-        SDL_RenderFillRect(renderer, &r);
+    // Obstacles
+    SDL_SetRenderDrawColor(renderer, 34, 139, 34, 255); // Forest Green
+    for (const auto& obs : obstacles) {
+        SDL_RenderFillRect(renderer, &obs.rect);
+        SDL_SetRenderDrawColor(renderer, 0, 100, 0, 255); // Border
+        SDL_RenderDrawRect(renderer, &obs.rect);
+        SDL_SetRenderDrawColor(renderer, 34, 139, 34, 255);
     }
 
     // Player
-    SDL_SetRenderDrawColor(renderer, 172, 50, 50, 255); // Madeline Hair Color
-    SDL_Rect rPlayer = {(int)player.rect.x, (int)player.rect.y, (int)player.rect.w, (int)player.rect.h};
-    SDL_RenderFillRect(renderer, &rPlayer);
+    SDL_Rect pRect = { (int)player.pos.x, (int)player.pos.y, (int)player.size.x, (int)player.size.y };
+    SDL_SetRenderDrawColor(renderer, 255, 69, 0, 255); // Red-Orange
+    SDL_RenderFillRect(renderer, &pRect);
 
-    // UI
-    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 100);
-    SDL_RenderFillRect(renderer, &btnLeft.rect);
-    SDL_RenderFillRect(renderer, &btnRight.rect);
-    SDL_SetRenderDrawColor(renderer, 0, 255, 0, 100);
-    SDL_RenderFillRect(renderer, &btnJump.rect);
+    // UI (On-Screen Controls)
+    RenderButton(btnLeft);
+    RenderButton(btnRight);
+    RenderButton(btnJump);
 
     SDL_RenderPresent(renderer);
 }
 
+// ==========================================
+// MAIN
+// ==========================================
+
 int main(int argc, char* argv[]) {
-    SDL_Init(SDL_INIT_VIDEO);
-    window = SDL_CreateWindow("Uphill", 0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT, SDL_WINDOW_FULLSCREEN | SDL_WINDOW_SHOWN);
+    if (SDL_Init(SDL_INIT_VIDEO) < 0) return -1;
+
+    window = SDL_CreateWindow("Uphill Proto", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI);
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-    SDL_RenderSetLogicalSize(renderer, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+    
+    // Critical for Android: Scale 1280x720 logic to whatever the phone screen is
+    SDL_RenderSetLogicalSize(renderer, SCREEN_WIDTH, SCREEN_HEIGHT);
 
-    InitGame();
+    InitControls();
+    LoadLevel();
 
-    Uint32 lastTime = SDL_GetTicks();
+    Player player;
+    player.pos = { 100, 500 };
+    player.vel = { 0, 0 };
+    player.size = { 32, 64 };
+    player.onGround = false;
+
+    InputState inputState;
+
+    Uint64 lastTime = SDL_GetTicks64();
+    float accumulator = 0.0f;
+
     while (isRunning) {
-        Uint32 curTime = SDL_GetTicks();
-        float dt = (curTime - lastTime) / 1000.0f;
-        lastTime = curTime;
-        if (dt > 0.05f) dt = 0.05f;
+        Uint64 currentTime = SDL_GetTicks64();
+        float frameTime = (currentTime - lastTime) / 1000.0f;
+        lastTime = currentTime;
+        if (frameTime > 0.25f) frameTime = 0.25f;
 
-        SDL_Event e;
-        while (SDL_PollEvent(&e)) {
-            if (e.type == SDL_QUIT) isRunning = false;
-            else if (e.type >= SDL_FINGERDOWN && e.type <= SDL_FINGERMOTION) {
-                HandleTouch(e.type, e.tf.fingerId, e.tf.x, e.tf.y);
-            }
+        accumulator += frameTime;
+
+        HandleInput(inputState);
+
+        while (accumulator >= TIME_STEP) {
+            UpdatePhysics(player, inputState, TIME_STEP);
+            accumulator -= TIME_STEP;
         }
-        Update(dt);
-        Render();
+
+        Render(player);
     }
+
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
     SDL_Quit();
     return 0;
 }
