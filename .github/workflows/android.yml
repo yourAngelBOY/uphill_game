@@ -14,7 +14,7 @@ jobs:
     
     - name: Setup SDL2 Project
       run: |
-        # 1. Download SDL2
+        # 1. Download SDL2 (Base only)
         wget https://github.com/libsdl-org/SDL/releases/download/release-2.30.0/SDL2-2.30.0.zip
         unzip -q SDL2-2.30.0.zip
         
@@ -30,36 +30,46 @@ jobs:
         mkdir -p android-project/app/src/main/jni/src
         cp main.cpp android-project/app/src/main/jni/src/
         
+    - name: Sanitize Source Code
+      run: |
+        # Remove Image and Mixer includes because we haven't installed those libraries yet.
+        # Chunk 1 doesn't use them, so we can safely remove the headers to prevent build errors.
+        cd android-project/app/src/main/jni/src
+        sed -i 's/#include <SDL2\/SDL_image.h>//g' main.cpp
+        sed -i 's/#include <SDL2\/SDL_mixer.h>//g' main.cpp
+        
+        # Fix include path: SDL2/SDL.h -> SDL.h (Android NDK pathing difference)
+        sed -i 's/#include <SDL2\/SDL.h>/#include <SDL.h>/g' main.cpp
+
     - name: Create Build Scripts
       run: |
         cd android-project/app/src/main/jni
         
-        # Create the Master Android.mk
-        # We write the content using a heredoc to ensure formatting is perfect.
-        # We escape $ signs so bash writes them literally to the file.
-        
+        # Create a robust Android.mk that handles paths correctly
         cat <<EOF > Android.mk
         LOCAL_PATH := \$(call my-dir)
         
-        # --- 1. Include SDL2 Definition ---
+        # --- 1. Include SDL2 ---
+        # We explicitly include the SDL2 makefile. 
+        # Note: This changes LOCAL_PATH to point to the SDL directory.
         include \$(LOCAL_PATH)/SDL/Android.mk
         
-        # --- 2. Define Game Module ---
+        # --- 2. Build Game ---
         include \$(CLEAR_VARS)
         
         LOCAL_MODULE := main
         
-        # Path to SDL headers
+        # Reset LOCAL_PATH to the JNI root because the previous include changed it
+        LOCAL_PATH := \$(call my-dir)
+        
         LOCAL_C_INCLUDES := \$(LOCAL_PATH)/SDL/include
         
-        # Source files: SDL main wrapper + your game code
-        # Note: We point to SDL_android_main.c inside the SDL folder
-        LOCAL_SRC_FILES := SDL/src/main/android/SDL_android_main.c src/main.cpp
+        # Define source files. 
+        # SDL_android_main.c is required to launch the app.
+        LOCAL_SRC_FILES := SDL/src/main/android/SDL_android_main.c \
+                           src/main.cpp
         
-        # Link against SDL2 (Defined in step 1)
         LOCAL_SHARED_LIBRARIES := SDL2
-        
-        # Link OpenGL and Log
         LOCAL_LDLIBS := -lGLESv1_CM -lGLESv2 -llog
         
         include \$(BUILD_SHARED_LIBRARY)
