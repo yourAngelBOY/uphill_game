@@ -14,21 +14,31 @@ jobs:
     
     - name: Setup SDL2 Project
       run: |
-        # Download SDL2 Android project template
+        # 1. Download SDL2
         wget https://github.com/libsdl-org/SDL/releases/download/release-2.30.0/SDL2-2.30.0.zip
         unzip -q SDL2-2.30.0.zip
-        mv SDL2-2.30.0/android-project .
-        mv SDL2-2.30.0 android-project/app/src/main/jni/SDL
         
-        # Setup directories
+        # 2. Move the Android Project template out to the root
+        mv SDL2-2.30.0/android-project .
+        
+        # 3. Rename the remaining source folder to 'SDL'
+        mv SDL2-2.30.0 SDL
+        
+        # 4. Move the SDL source folder into the JNI directory
+        # We use -f to force and ensure the parent dir exists
+        mkdir -p android-project/app/src/main/jni
+        mv SDL android-project/app/src/main/jni/
+        
+        # 5. Setup the 'src' directory for your main.cpp
         mkdir -p android-project/app/src/main/jni/src
         
-        # Move your source code
+        # 6. Copy your game code
         cp main.cpp android-project/app/src/main/jni/src/
         
-    - name: Configure Build
+    - name: Configure Build Files
       run: |
         cd android-project/app/src/main/jni/src
+        
         # Create Android.mk
         echo 'LOCAL_PATH := $(call my-dir)' > Android.mk
         echo 'include $(CLEAR_VARS)' >> Android.mk
@@ -40,7 +50,7 @@ jobs:
         echo 'LOCAL_LDLIBS := -lGLESv1_CM -lGLESv2 -llog' >> Android.mk
         echo 'include $(BUILD_SHARED_LIBRARY)' >> Android.mk
         
-        # Create Application.mk
+        # Create Application.mk in the parent jni folder
         cd ..
         echo 'APP_ABI := arm64-v8a' > Application.mk
         echo 'APP_STL := c++_shared' >> Application.mk
