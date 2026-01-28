@@ -1,0 +1,59 @@
+name: Build Android APK
+
+on: [push, workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+    
+    - name: Setup SDL2 Project
+      run: |
+        # Download SDL2 Android project template
+        wget https://github.com/libsdl-org/SDL/releases/download/release-2.30.0/SDL2-2.30.0.zip
+        unzip -q SDL2-2.30.0.zip
+        mv SDL2-2.30.0/android-project .
+        mv SDL2-2.30.0 android-project/app/src/main/jni/SDL
+        
+        # Setup directories
+        mkdir -p android-project/app/src/main/jni/src
+        
+        # Move your source code
+        cp main.cpp android-project/app/src/main/jni/src/
+        
+    - name: Configure Build
+      run: |
+        cd android-project/app/src/main/jni/src
+        # Create Android.mk
+        echo 'LOCAL_PATH := $(call my-dir)' > Android.mk
+        echo 'include $(CLEAR_VARS)' >> Android.mk
+        echo 'LOCAL_MODULE := main' >> Android.mk
+        echo 'SDL_PATH := ../SDL' >> Android.mk
+        echo 'LOCAL_C_INCLUDES := $(LOCAL_PATH)/$(SDL_PATH)/include' >> Android.mk
+        echo 'LOCAL_SRC_FILES := main.cpp' >> Android.mk
+        echo 'LOCAL_SHARED_LIBRARIES := SDL2' >> Android.mk
+        echo 'LOCAL_LDLIBS := -lGLESv1_CM -lGLESv2 -llog' >> Android.mk
+        echo 'include $(BUILD_SHARED_LIBRARY)' >> Android.mk
+        
+        # Create Application.mk
+        cd ..
+        echo 'APP_ABI := arm64-v8a' > Application.mk
+        echo 'APP_STL := c++_shared' >> Application.mk
+        echo 'APP_PLATFORM := android-21' >> Application.mk
+
+    - name: Build APK
+      run: |
+        cd android-project
+        chmod +x gradlew
+        ./gradlew assembleDebug
+        
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: Uphill-Game-APK
+        path: android-project/app/build/outputs/apk/debug/app-debug.apk
