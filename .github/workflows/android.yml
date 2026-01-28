@@ -18,53 +18,59 @@ jobs:
         wget https://github.com/libsdl-org/SDL/releases/download/release-2.30.0/SDL2-2.30.0.zip
         unzip -q SDL2-2.30.0.zip
         
-        # 2. Move the Android Project template out to the root
+        # 2. Setup Project Structure
         mv SDL2-2.30.0/android-project .
-        
-        # 3. Rename the remaining source folder to 'SDL'
         mv SDL2-2.30.0 SDL
         
-        # 4. Move the SDL source folder into the JNI directory
+        # 3. Move files to JNI
         mkdir -p android-project/app/src/main/jni
         mv SDL android-project/app/src/main/jni/
         
-        # 5. Setup the 'src' directory for your main.cpp
+        # 4. Setup Source
         mkdir -p android-project/app/src/main/jni/src
-        
-        # 6. Copy your game code
         cp main.cpp android-project/app/src/main/jni/src/
         
-    - name: Configure Build Files
+    - name: Create Build Scripts
       run: |
-        # --- STEP 1: Create the Game Module Makefile ---
-        cd android-project/app/src/main/jni/src
+        cd android-project/app/src/main/jni
         
-        echo 'LOCAL_PATH := $(call my-dir)' > Android.mk
-        echo 'include $(CLEAR_VARS)' >> Android.mk
-        echo 'LOCAL_MODULE := main' >> Android.mk
-        echo 'SDL_PATH := ../SDL' >> Android.mk
-        echo 'LOCAL_C_INCLUDES := $(LOCAL_PATH)/$(SDL_PATH)/include' >> Android.mk
+        # Create the Master Android.mk
+        # We write the content using a heredoc to ensure formatting is perfect.
+        # We escape $ signs so bash writes them literally to the file.
         
-        # Define source files relative to jni/src
-        # We include SDL_android_main.c here so the app knows how to launch
-        echo 'LOCAL_SRC_FILES := ../SDL/src/main/android/SDL_android_main.c main.cpp' >> Android.mk
+        cat <<EOF > Android.mk
+        LOCAL_PATH := \$(call my-dir)
         
-        echo 'LOCAL_SHARED_LIBRARIES := SDL2' >> Android.mk
-        echo 'LOCAL_LDLIBS := -lGLESv1_CM -lGLESv2 -llog' >> Android.mk
-        echo 'include $(BUILD_SHARED_LIBRARY)' >> Android.mk
+        # --- 1. Include SDL2 Definition ---
+        include \$(LOCAL_PATH)/SDL/Android.mk
         
-        # --- STEP 2: Create the ROOT Makefile (The Fix) ---
-        # We explicitly include SDL first, then src.
-        cd ..
-        echo 'LOCAL_PATH := $(call my-dir)' > Android.mk
-        echo 'include $(CLEAR_VARS)' >> Android.mk
-        echo 'include $(LOCAL_PATH)/SDL/Android.mk' >> Android.mk
-        echo 'include $(LOCAL_PATH)/src/Android.mk' >> Android.mk
+        # --- 2. Define Game Module ---
+        include \$(CLEAR_VARS)
         
-        # --- STEP 3: Create Application.mk ---
-        echo 'APP_ABI := arm64-v8a' > Application.mk
-        echo 'APP_STL := c++_shared' >> Application.mk
-        echo 'APP_PLATFORM := android-21' >> Application.mk
+        LOCAL_MODULE := main
+        
+        # Path to SDL headers
+        LOCAL_C_INCLUDES := \$(LOCAL_PATH)/SDL/include
+        
+        # Source files: SDL main wrapper + your game code
+        # Note: We point to SDL_android_main.c inside the SDL folder
+        LOCAL_SRC_FILES := SDL/src/main/android/SDL_android_main.c src/main.cpp
+        
+        # Link against SDL2 (Defined in step 1)
+        LOCAL_SHARED_LIBRARIES := SDL2
+        
+        # Link OpenGL and Log
+        LOCAL_LDLIBS := -lGLESv1_CM -lGLESv2 -llog
+        
+        include \$(BUILD_SHARED_LIBRARY)
+        EOF
+        
+        # Create Application.mk
+        cat <<EOF > Application.mk
+        APP_ABI := arm64-v8a
+        APP_STL := c++_shared
+        APP_PLATFORM := android-21
+        EOF
 
     - name: Build APK
       run: |
