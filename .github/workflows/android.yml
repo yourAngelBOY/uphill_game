@@ -45,17 +45,21 @@ jobs:
         echo 'SDL_PATH := ../SDL' >> Android.mk
         echo 'LOCAL_C_INCLUDES := $(LOCAL_PATH)/$(SDL_PATH)/include' >> Android.mk
         
-        # IMPORTANT: We must compile SDL_android_main.c alongside main.cpp
-        echo 'LOCAL_SRC_FILES := $(SDL_PATH)/src/main/android/SDL_android_main.c main.cpp' >> Android.mk
+        # Define source files relative to jni/src
+        # We include SDL_android_main.c here so the app knows how to launch
+        echo 'LOCAL_SRC_FILES := ../SDL/src/main/android/SDL_android_main.c main.cpp' >> Android.mk
         
         echo 'LOCAL_SHARED_LIBRARIES := SDL2' >> Android.mk
         echo 'LOCAL_LDLIBS := -lGLESv1_CM -lGLESv2 -llog' >> Android.mk
         echo 'include $(BUILD_SHARED_LIBRARY)' >> Android.mk
         
-        # --- STEP 2: Overwrite the Root Makefile to include subdirs ---
+        # --- STEP 2: Create the ROOT Makefile (The Fix) ---
+        # We explicitly include SDL first, then src.
         cd ..
         echo 'LOCAL_PATH := $(call my-dir)' > Android.mk
-        echo 'include $(call all-subdir-makefiles)' >> Android.mk
+        echo 'include $(CLEAR_VARS)' >> Android.mk
+        echo 'include $(LOCAL_PATH)/SDL/Android.mk' >> Android.mk
+        echo 'include $(LOCAL_PATH)/src/Android.mk' >> Android.mk
         
         # --- STEP 3: Create Application.mk ---
         echo 'APP_ABI := arm64-v8a' > Application.mk
